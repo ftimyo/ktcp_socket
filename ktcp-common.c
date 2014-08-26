@@ -422,14 +422,14 @@ static int	client_sends = 0;
 
 static u8	*trash = NULL;
 
-int client_connect(void *)
+int client_connect(void *dummie)
 {
 	ktcp_connect(ip_peer, NULL);
 	ipt_print_ip();
 	return 0;
 }
 
-int client_thread(void *)
+int client_thread(void *dummie)
 {
 	int i = 0;
 	struct socket *sk = ktcp_ipt_sk(ip_peer);
@@ -457,7 +457,7 @@ ssize_t start_client_thread(struct kobject *kobj, struct kobj_attribute *attr, c
 	if (atomic_read(&client_on) != 0)
 		return count;
 	sscanf(buf, "%d\n", &i);
-	if (i =< 0)
+	if (i <= 0)
 		return count;
 	client_sends = i;
 	atomic_set(&client_on, 1);
