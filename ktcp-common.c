@@ -412,12 +412,58 @@ int ktcp_exit()
 	return 0;
 }
 /*------------------module only--------------------*/
-
 /*-----------------sysfs>--------------------------*/
 static struct kobject *control = NULL;
 
 static char ip_string[100] = {0};
 static net_addr_t ip_peer;
+static atomic_t client_on = ATOMIC_INIT(0);
+static int	client_sends = 0;
+
+static u8	*trash = NULL;
+
+int client_connect(void *)
+{
+	ktcp_connect(ip_peer, NULL);
+	ipt_print_ip();
+	return 0;
+}
+
+int client_thread(void *)
+{
+	int i = 0;
+	struct socket *sk = ktcp_ipt_sk(ip_peer);
+	if (sk == NULL) {
+		atomic_set(&client_on, 0);
+		return 0;
+	}
+	for (; i < client_sends; ++i) {
+		ktcp_send(sk, trash, PAGE_SIZE);
+	}
+
+	atomic_set(&client_on, 0);
+	return 0;
+}
+
+ssize_t show_client_status(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	ssize_t count = sprintf(buf,"%d\n", atomic_read(&client_on));
+	return count;
+}
+
+ssize_t start_client_thread(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	int i;
+	if (atomic_read(&client_on) != 0)
+		return count;
+	sscanf(buf, "%d\n", &i);
+	if (i =< 0)
+		return count;
+	client_sends = i;
+	atomic_set(&client_on, 1);
+	kthread_run(client_thread, NULL, "client_thread");
+	return count;
+}
 
 ssize_t ip_peer_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -428,13 +474,16 @@ ssize_t ip_peer_store(struct kobject *kobj, struct kobj_attribute *attr, const c
 {
 	sscanf(buf, "%s\n", ip_string);
 	ip_peer = in_aton(ip_string);
+	kthread_run(client_connect, NULL, "client_con");
 	return count;
 }
 
 static struct kobj_attribute attr_ip_peer = __ATTR(ip_peer, 0666, ip_peer_show, ip_peer_store);
+static struct kobj_attribute attr_client = __ATTR(client, 0666, show_client_status, start_client_thread);
 
 static struct attribute *attrs[] = {
 	&attr_ip_peer.attr,
+	&attr_client.attr,
 	NULL,
 };
 
@@ -445,12 +494,14 @@ static struct attribute_group attr_group = {
 
 void dummie_handler(struct socket *sk, net_addr_t ip)
 {
+	ktcp_recv(sk, trash, PAGE_SIZE);
 }
 
 int init_module(void)
 {
 	int ret;
 	ktcp_init(dummie_handler);
+	trash = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	control = kobject_create_and_add("ktcp_control", &(((struct module*)(THIS_MODULE))->mkobj.kobj));
 	if (control)
 		ret = sysfs_create_group(control, &attr_group);
