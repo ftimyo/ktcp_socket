@@ -168,13 +168,11 @@ static void ktcp_data_ready(struct sock *sk, int bytes)
 	wake_up_process(ktcp_poll_lwp);
 }
 
-static inline int ktcp_create_socket(struct socket **sk, sk_ready_ft ready)
+static inline int ktcp_create_socket(struct socket **sk)
 {
     int ret =  sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
 	if (origSk == NULL)
 		origSk = (*sk)->sk->sk_data_ready;
-	if (ready)
-		(*sk)->sk->sk_data_ready = ready;
 	return ret;
 }
 
@@ -307,11 +305,12 @@ int ktcp_connect(net_addr_t ip)
 	struct socket *sk;
 	if (ipt_ip_entry(ip))
 		return ret;
-	if ((ret = ktcp_create_socket(&sk, ktcp_data_ready)))
+	if ((ret = ktcp_create_socket(&sk)))
 		return ret;
 
 	ret = sk->ops->connect(sk, ktcp_sockaddr(&addr, ip),
 			sizeof(struct sockaddr_in), 0);
+	sk->sk->sk_data_ready = ktcp_data_ready;
 	if (ret) {
 		sock_release(sk);
 		pr_emerg("%s:%d:fail to connect to %pI4\n", __func__, __LINE__, &ip);
@@ -356,11 +355,13 @@ static int ktcp_accept(struct socket *sk, ipt_entry** entry)
 	int addr_len = 0;
 	*entry = NULL;
 
-	ret = ktcp_create_socket(&new_sk, ktcp_data_ready);
+	ret = ktcp_create_socket(&new_sk);
 
 	if ((ret))
 		return ret;
 	ret = sk->ops->accept(sk, new_sk, 0);
+
+	new_sk->sk->sk_data_ready = ktcp_data_ready;
 
 	if (ret < 0) {
 		sock_release(new_sk);
@@ -402,7 +403,7 @@ static int ktcp_server(void *dummie)
 
 	init_waitqueue_head(&wq);
 
-	ktcp_create_socket(&listen_socket, ktcp_req_ready);
+	ktcp_create_socket(&listen_socket);
 
 	isock = inet_csk(listen_socket->sk);
 
@@ -411,6 +412,8 @@ static int ktcp_server(void *dummie)
 	ktcp_bind(listen_socket);
 
 	ktcp_listen(listen_socket, 64);
+
+	listen_socket->sk->sk_data_ready = ktcp_req_ready;
 
 	while (!kthread_should_stop()) {
 		ipt_entry *entry;
@@ -471,7 +474,8 @@ int client_thread(void *dummie)
 		return 0;
 	}
 	for (; i < client_sends; ++i) {
-		ktcp_send(sk, trash, PAGE_SIZE);
+		int bytes;
+		bytes = ktcp_send(sk, trash, PAGE_SIZE);
 	}
 
 	atomic_set(&client_on, 0);
