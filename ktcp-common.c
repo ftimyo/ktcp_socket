@@ -274,7 +274,6 @@ int ktcp_connect(net_addr_t ip, ipt_entry** entry)
 	int ret = 0;
 	struct sockaddr_in addr;
 	struct socket *sk;
-	*entry = NULL;
 	if (ipt_ip_entry(ip))
 		return ret;
 	if ((ret = ktcp_create_socket(&sk, ktcp_data_ready)))
@@ -284,11 +283,18 @@ int ktcp_connect(net_addr_t ip, ipt_entry** entry)
 			sizeof(struct sockaddr_in), 0);
 	if (ret) {
 		sock_release(sk);
+		pr_emerg("%s:%d:fail to connect to %pI4\n", __func__, __LINE__, &ip);
 		return ret;
 	}
-	pr_emerg("connect to %pI4\n", &ip);
-	if (entry)
+
+	if (entry != NULL) {
 		*entry = ipt_add_entry(sk, ip);
+	} else {
+		ipt_add_entry(sk, ip);
+	}
+
+	pr_emerg("connect to %pI4\n", &ip);
+
 	return ret;
 }
 
@@ -334,9 +340,9 @@ static int ktcp_accept(struct socket *sk, ipt_entry** entry)
 		return ret;
 	}
 
-	pr_emerg("accpet conn from %pI4\n", &addr.sin_addr.s_addr);
-	
 	new_sk->ops->getname(new_sk, (struct sockaddr*)&addr, &addr_len, 1);
+
+	pr_emerg("accpet conn from %pI4\n", &addr.sin_addr.s_addr);
 
 	if (ipt_ip_entry(addr.sin_addr.s_addr)) {
 		ktcp_destroy_socket(new_sk);
