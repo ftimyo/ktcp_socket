@@ -27,7 +27,7 @@ int ktcp_send(struct socket *sk, void *buffer, size_t length);
 
 int ktcp_connect(net_addr_t ip);
 
-int ktcp_close(net_addr_t ip);
+void ktcp_close(net_addr_t ip);
 
 int ktcp_init(ktcp_user_ft handler);
 

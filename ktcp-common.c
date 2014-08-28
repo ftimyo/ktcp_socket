@@ -21,29 +21,43 @@ static inline int ktcp_destroy_socket(struct socket*);
 
 static rwlock_t	ipt_lock;
 
+static int __ipt_add_entry(void *entry)
+{
+	write_lock(&ipt_lock);
+	list_add_tail(&(((ipt_entry*)entry)->list), &ipt);
+	write_unlock(&ipt_lock);
+	return 0;
+}
+
 static inline ipt_entry* ipt_add_entry(struct socket *sk, net_addr_t ip)
 {
 	ipt_entry *entry;
-	write_lock(&ipt_lock);
 	entry = kzalloc(sizeof(ipt_entry), GFP_ATOMIC);
-	entry->socket = sk;
-	entry->ip = ip;
-	list_add_tail(&entry->list, &ipt);
-	write_unlock(&ipt_lock);
+	if (entry) {
+		entry->socket = sk;
+		entry->ip = ip;
+		kthread_run(__ipt_add_entry, entry, "ipt_add");
+	}
 	return entry;
 }
 
-static inline int ipt_del_entry(ipt_entry *entry)
+static int __ipt_del_entry(void *entry)
 {
-	int ret; 
+	int ret;
 	write_lock(&ipt_lock);
-	ret = ktcp_destroy_socket(entry->socket);
+	ret = ktcp_destroy_socket(((ipt_entry*)entry)->socket);
 	if (ret)
 		pr_emerg("%s:%d:error in release sock\n", __func__, __LINE__);
-	list_del(&entry->list);
+	list_del(&(((ipt_entry*)entry)->list));
 	kfree(entry);
 	write_unlock(&ipt_lock);
-	return ret;
+	return 0;
+}
+static inline void ipt_del_entry(ipt_entry *entry)
+{
+	if (entry) {
+		kthread_run(__ipt_del_entry, entry, "ipt_del");
+	}
 }
 
 static inline void ipt_print_ip(void)
@@ -117,7 +131,7 @@ static inline void ipt_init(ktcp_user_ft handler)
 	ipt_poll_handler = handler;
 }
 
-static inline void ipt_exit(void)
+static int __ipt_exit(void* dummie)
 {
 	ipt_entry *entry, *safe;
 	write_lock(&ipt_lock);
@@ -127,6 +141,12 @@ static inline void ipt_exit(void)
 		kfree(entry);
 	}
 	write_unlock(&ipt_lock);
+
+	return 0;
+}
+static inline void ipt_exit(void)
+{
+	kthread_run(__ipt_exit, NULL, "ipt_exit");
 }
 
 /*-------ipt data and ops<-------*/
@@ -305,9 +325,9 @@ int ktcp_connect(net_addr_t ip)
 	return ret;
 }
 
-int ktcp_close(net_addr_t ip)
+void ktcp_close(net_addr_t ip)
 {
-	return ipt_del_entry(ipt_ip_entry(ip));
+	ipt_del_entry(ipt_ip_entry(ip));
 }
 
 static int ktcp_bind(struct socket *sk)
@@ -507,7 +527,8 @@ static struct attribute_group attr_group = {
 
 void dummie_handler(struct socket *sk, net_addr_t ip)
 {
-	ktcp_recv(sk, trash, PAGE_SIZE);
+	int bytes;
+	bytes = ktcp_recv(sk, trash, PAGE_SIZE);
 }
 
 int init_module(void)
