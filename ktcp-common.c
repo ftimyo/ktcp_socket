@@ -60,14 +60,18 @@ static inline void ipt_del_entry(ipt_entry *entry)
 	}
 }
 
-static inline void ipt_print_ip(void)
+static inline int ipt_print_ip(void)
 {
 	ipt_entry *entry;
+	int cnt = 0;
 	read_lock(&ipt_lock);
 	list_for_each_entry(entry, &ipt, list) {
+		cnt++;
 		pr_info("%pI4\n", &entry->ip);
 	}
 	read_unlock(&ipt_lock);
+
+	return cnt;
 }
 static inline ipt_entry* ipt_ip_entry(net_addr_t ip)
 {
@@ -448,79 +452,98 @@ int ktcp_exit()
 	return 0;
 }
 /*------------------module only--------------------*/
+static u8	*trash = NULL;
+static atomic_t clients = ATOMIC_INIT(0);
+static atomic_t iterations = ATOMIC_INIT(0);
+
+net_addr_t ip_aton(const char *buf)
+{
+	char ip_string[20] = {0};
+	sscanf(buf, "%s\n", ip_string);
+	return in_aton(ip_string);
+}
+
+int client_thread(void *ipp)
+{
+	struct socket *sk;
+	int i, cnt;
+	net_addr_t ip; 
+
+	atomic_inc(&clients);
+
+	ip = *(net_addr_t*)ipp;
+	kfree(ipp);
+
+	cnt = atomic_read(&iterations);
+	sk = ktcp_ipt_sk(ip);
+
+	if (sk == NULL) {
+		atomic_dec(&clients);
+		return 0;
+	}
+
+	pr_info("%s:%d start sending to %pI4: itr %d\n", __func__, __LINE__, &ip, cnt);
+
+	for (i = 0; i < cnt; ++i) {
+		ktcp_send(sk, trash, PAGE_SIZE);
+	}
+
+	atomic_dec(&clients);
+	return 0;
+}
 /*-----------------sysfs>--------------------------*/
 static struct kobject *control = NULL;
 
-static char ip_string[100] = {0};
-static net_addr_t ip_peer;
-static atomic_t client_on = ATOMIC_INIT(0);
-static int	client_sends = 0;
-
-static u8	*trash = NULL;
-
-int client_connect(void *dummie)
+ssize_t iterations_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	ktcp_connect(ip_peer);
-	ipt_print_ip();
-	return 0;
-}
-
-int client_thread(void *dummie)
-{
-	int i = 0;
-	struct socket *sk = ktcp_ipt_sk(ip_peer);
-	if (sk == NULL) {
-		atomic_set(&client_on, 0);
-		return 0;
-	}
-	for (; i < client_sends; ++i) {
-		int bytes;
-		bytes = ktcp_send(sk, trash, PAGE_SIZE);
-	}
-
-	atomic_set(&client_on, 0);
-	return 0;
-}
-
-ssize_t show_client_status(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	ssize_t count = sprintf(buf,"%d\n", atomic_read(&client_on));
+	ssize_t count = sprintf(buf, "%d\n", atomic_read(&iterations));
 	return count;
 }
 
-ssize_t start_client_thread(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+ssize_t iterations_set(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
 {
-	int i;
-	if (atomic_read(&client_on) != 0)
-		return count;
-	sscanf(buf, "%d\n", &i);
-	if (i <= 0)
-		return count;
-	client_sends = i;
-	atomic_set(&client_on, 1);
-	kthread_run(client_thread, NULL, "client_thread");
+	int itr = 0;
+	sscanf(buf, "%d\n", &itr);
+	atomic_set(&iterations, itr);
 	return count;
 }
 
-ssize_t ip_peer_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+ssize_t clients_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	ssize_t count = snprintf(buf, 50, "%pI4\n", &ip_peer);
-	return count;
-}
-ssize_t ip_peer_store(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
-{
-	sscanf(buf, "%s\n", ip_string);
-	ip_peer = in_aton(ip_string);
-	kthread_run(client_connect, NULL, "client_con");
+	ssize_t count = sprintf(buf, "%d\n", atomic_read(&clients));
 	return count;
 }
 
-static struct kobj_attribute attr_ip_peer = __ATTR(ip_peer, 0666, ip_peer_show, ip_peer_store);
-static struct kobj_attribute attr_client = __ATTR(client, 0666, show_client_status, start_client_thread);
+ssize_t clients_add(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	net_addr_t *ip = kzalloc(sizeof(net_addr_t), GFP_ATOMIC);
+	*ip = ip_aton(buf);
+
+	if (NULL == kthread_run(client_thread, (void*)ip, "ktcp_client"))
+		kfree(ip);
+	return count;
+}
+
+ssize_t ip_table_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	ssize_t count = sprintf(buf, "%d\n", ipt_print_ip());
+	return count;
+}
+ssize_t ip_table_add(struct kobject *kobj, struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	net_addr_t ip = ip_aton(buf);
+	ktcp_connect(ip);
+	return count;
+}
+
+static struct kobj_attribute attr_ip_table= __ATTR(ip_table, 0666, ip_table_show, ip_table_add);
+static struct kobj_attribute attr_clients= __ATTR(clients, 0666, clients_show, clients_add);
+static struct kobj_attribute attr_iterations= __ATTR(iterations, 0666, iterations_show, iterations_set);
 
 static struct attribute *attrs[] = {
-	&attr_ip_peer.attr,
-	&attr_client.attr,
+	&attr_ip_table.attr,
+	&attr_clients.attr,
+	&attr_iterations.attr,
 	NULL,
 };
 
@@ -533,14 +556,20 @@ void dummie_handler(struct socket *sk, net_addr_t ip)
 {
 	int bytes;
 	bytes = ktcp_recv(sk, trash, PAGE_SIZE);
+	if (bytes != PAGE_SIZE)
+		pr_emerg("%s:%d: recv %d bytes\n", __func__, __LINE__, bytes);
 }
 
 int init_module(void)
 {
 	int ret;
+
 	ktcp_init(dummie_handler);
+
 	trash = kmalloc(PAGE_SIZE, GFP_KERNEL);
+
 	control = kobject_create_and_add("ktcp_control", &(((struct module*)(THIS_MODULE))->mkobj.kobj));
+
 	if (control)
 		ret = sysfs_create_group(control, &attr_group);
 
@@ -551,6 +580,7 @@ void cleanup_module()
 {
 	if (control)
 		kobject_del(control);
+	kfree(trash);
 	ktcp_exit();
 }
 
