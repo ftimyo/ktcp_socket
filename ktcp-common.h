@@ -8,11 +8,6 @@
 
 typedef __be32 net_addr_t;
 
-typedef struct ipt_entry {
-	struct list_head list;
-    net_addr_t ip;
-    struct socket *socket;
-} ipt_entry;
 
 typedef void (*ktcp_user_ft)(struct socket*, net_addr_t);
 
@@ -30,7 +25,7 @@ int ktcp_iov_send(struct socket *sk, struct iovec *iov,
 
 int ktcp_send(struct socket *sk, void *buffer, size_t length);
 
-int ktcp_connect(net_addr_t ip, ipt_entry** entry);
+int ktcp_connect(net_addr_t ip);
 
 int ktcp_close(net_addr_t ip);
 

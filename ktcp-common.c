@@ -3,11 +3,22 @@
 #include <linux/list.h>
 #include <linux/rwlock.h>
 #define TCP_PORT    8888
+
 typedef void (*sk_ready_ft)(struct sock*, int);
+
+typedef struct ipt_entry {
+	struct list_head list;
+    net_addr_t ip;
+    struct socket *socket;
+} ipt_entry;
+
 /*-------ipt data and ops>-------*/
 static struct list_head ipt;
+
 static ktcp_user_ft ipt_poll_handler;
+
 static inline int ktcp_destroy_socket(struct socket*);
+
 static rwlock_t	ipt_lock;
 
 static inline ipt_entry* ipt_add_entry(struct socket *sk, net_addr_t ip)
@@ -269,7 +280,7 @@ int ktcp_send(struct socket *sk, void *buffer, size_t length)
 	return ktcp_iov_send(sk, &iov, 1, length);
 }
 
-int ktcp_connect(net_addr_t ip, ipt_entry** entry)
+int ktcp_connect(net_addr_t ip)
 {
 	int ret = 0;
 	struct sockaddr_in addr;
@@ -287,11 +298,7 @@ int ktcp_connect(net_addr_t ip, ipt_entry** entry)
 		return ret;
 	}
 
-	if (entry != NULL) {
-		*entry = ipt_add_entry(sk, ip);
-	} else {
-		ipt_add_entry(sk, ip);
-	}
+	ipt_add_entry(sk, ip);
 
 	pr_emerg("connect to %pI4\n", &ip);
 
@@ -430,7 +437,7 @@ static u8	*trash = NULL;
 
 int client_connect(void *dummie)
 {
-	ktcp_connect(ip_peer, NULL);
+	ktcp_connect(ip_peer);
 	ipt_print_ip();
 	return 0;
 }
