@@ -330,6 +330,7 @@ int ktcp_connect(net_addr_t ip)
 
 void ktcp_close(net_addr_t ip)
 {
+	pr_emerg("%s:%d closing socket for ip %pI4\n", __func__, __LINE__, &ip);
 	ipt_del_entry(ipt_ip_entry(ip));
 }
 
@@ -454,7 +455,7 @@ int ktcp_exit()
 /*------------------module only--------------------*/
 static u8	*trash = NULL;
 static atomic_t clients = ATOMIC_INIT(0);
-static atomic_t iterations = ATOMIC_INIT(0);
+static atomic_t iterations = ATOMIC_INIT(1000000);
 
 net_addr_t ip_aton(const char *buf)
 {
@@ -487,6 +488,7 @@ int client_thread(void *ipp)
 	for (i = 0; i < cnt; ++i) {
 		ktcp_send(sk, trash, PAGE_SIZE);
 	}
+	pr_emerg("%s:%d finish sending task\n", __func__, __LINE__);
 
 	atomic_dec(&clients);
 	return 0;
@@ -556,8 +558,8 @@ void dummie_handler(struct socket *sk, net_addr_t ip)
 {
 	int bytes;
 	bytes = ktcp_recv(sk, trash, PAGE_SIZE);
-	if (bytes != PAGE_SIZE)
-		pr_emerg("%s:%d: recv %d bytes\n", __func__, __LINE__, bytes);
+	if (unlikely(bytes == 0))
+		ktcp_close(ip);
 }
 
 int init_module(void)

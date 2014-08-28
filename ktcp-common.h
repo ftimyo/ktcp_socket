@@ -16,8 +16,12 @@ struct socket* ktcp_ipt_sk(net_addr_t ip);
 
 net_addr_t ktcp_ipt_ip(struct socket *sk);
 
+/*get ip address of the NIC*/
 net_addr_t ktcp_ip(const char *nic);
 
+/*ktcp_recv: if return val is 0, while lenght is not 0,
+ * peer must close the connection.
+ * Therefore we should close the connection too*/
 int ktcp_recv(struct socket *sk, void *buffer, int length);
 
 int ktcp_iov_send(struct socket *sk, struct iovec *iov,
