@@ -135,22 +135,17 @@ static inline void ipt_init(ktcp_user_ft handler)
 	ipt_poll_handler = handler;
 }
 
-static int __ipt_exit(void* dummie)
+static inline void ipt_exit(void)
 {
 	ipt_entry *entry, *safe;
 	write_lock(&ipt_lock);
 	list_for_each_entry_safe(entry, safe, &ipt, list) {
+		pr_emerg("%s:remove ipt entry for %pI4\n", __func__, &entry->ip);
 		ktcp_destroy_socket(entry->socket);
 		list_del(&entry->list);
 		kfree(entry);
 	}
 	write_unlock(&ipt_lock);
-
-	return 0;
-}
-static inline void ipt_exit(void)
-{
-	kthread_run(__ipt_exit, NULL, "ipt_exit");
 }
 
 /*-------ipt data and ops<-------*/
@@ -558,8 +553,6 @@ void dummie_handler(struct socket *sk, net_addr_t ip)
 {
 	int bytes;
 	bytes = ktcp_recv(sk, trash, PAGE_SIZE);
-	if (unlikely(bytes == 0))
-		ktcp_close(ip);
 }
 
 int init_module(void)
@@ -569,8 +562,10 @@ int init_module(void)
 	ktcp_init(dummie_handler);
 
 	trash = kmalloc(PAGE_SIZE, GFP_KERNEL);
-
+#if 0
 	control = kobject_create_and_add("ktcp_control", &(((struct module*)(THIS_MODULE))->mkobj.kobj));
+#endif
+	control = kobject_create_and_add("ktcp_control", NULL);
 
 	if (control)
 		ret = sysfs_create_group(control, &attr_group);
