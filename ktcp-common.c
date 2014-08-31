@@ -65,9 +65,28 @@ static inline int ipt_print_ip(void)
 	ipt_entry *entry;
 	int cnt = 0;
 	read_lock(&ipt_lock);
+	pr_emerg("---------->ipt<----------");
 	list_for_each_entry(entry, &ipt, list) {
 		cnt++;
-		pr_info("%pI4\n", &entry->ip);
+		switch (entry->socket->state) {
+			case SS_FREE:
+				pr_emerg("socket %pI4 free\n", &entry->ip);
+				break;
+			case SS_UNCONNECTED:
+				pr_emerg("socket %pI4 unconnected\n", &entry->ip);
+				break;
+			case SS_CONNECTED:
+				pr_emerg("socket %pI4 connected\n", &entry->ip);
+				break;
+			case SS_CONNECTING:
+				pr_emerg("socket %pI4 connecting\n", &entry->ip);
+				break;
+			case SS_DISCONNECTING:
+				pr_emerg("socket %pI4 disconnecting\n", &entry->ip);
+				break;
+			default:
+				pr_emerg("socket %pI4 unknown status\n", &entry->ip);
+		}
 	}
 	read_unlock(&ipt_lock);
 
