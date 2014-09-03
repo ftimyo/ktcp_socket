@@ -67,25 +67,26 @@ static inline int ipt_print_ip(void)
 	read_lock(&ipt_lock);
 	pr_emerg("---------->ipt<----------");
 	list_for_each_entry(entry, &ipt, list) {
+		int buf_size = entry->socket->sk->sk_rcvbuf;
 		cnt++;
 		switch (entry->socket->state) {
 			case SS_FREE:
-				pr_emerg("socket %pI4 free\n", &entry->ip);
+				pr_emerg("socket %pI4 rcvbuf: %d free\n", &entry->ip, buf_size);
 				break;
 			case SS_UNCONNECTED:
-				pr_emerg("socket %pI4 unconnected\n", &entry->ip);
+				pr_emerg("socket %pI4 rcvbuf: %d unconnected\n", &entry->ip, buf_size);
 				break;
 			case SS_CONNECTED:
-				pr_emerg("socket %pI4 connected\n", &entry->ip);
+				pr_emerg("socket %pI4 rcvbuf: %d connected\n", &entry->ip, buf_size);
 				break;
 			case SS_CONNECTING:
-				pr_emerg("socket %pI4 connecting\n", &entry->ip);
+				pr_emerg("socket %pI4 rcvbuf: %d connecting\n", &entry->ip, buf_size);
 				break;
 			case SS_DISCONNECTING:
-				pr_emerg("socket %pI4 disconnecting\n", &entry->ip);
+				pr_emerg("socket %pI4 rcvbuf: %d disconnecting\n", &entry->ip, buf_size);
 				break;
 			default:
-				pr_emerg("socket %pI4 unknown status\n", &entry->ip);
+				pr_emerg("socket %pI4 rcvbuf: %d unknown status\n", &entry->ip, buf_size);
 		}
 	}
 	read_unlock(&ipt_lock);
@@ -189,6 +190,7 @@ static void ktcp_data_ready(struct sock *sk, int bytes)
 static inline int ktcp_create_socket(struct socket **sk)
 {
     int ret =  sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
+	(*sk)->sk->sk_rcvbuf = min_t(u32, PAGE_SIZE * 50, sysctl_rmem_max);
 	if (origSk == NULL)
 		origSk = (*sk)->sk->sk_data_ready;
 	return ret;
