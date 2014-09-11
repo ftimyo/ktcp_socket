@@ -189,7 +189,7 @@ static void ktcp_data_ready(struct sock *sk, int bytes)
 
 static inline int ktcp_create_socket(struct socket **sk)
 {
-	struct mm_segment_t oldfs;
+	mm_segment_t oldfs;
     int ret =  sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
 	int val = 1;
 
@@ -610,6 +610,7 @@ void cleanup_module()
 		kobject_del(control);
 	kfree(trash);
 	ktcp_exit();
+	pr_info("ktcp cleanup\n");
 }
 
 MODULE_LICENSE("Dual BSD/GPL");
