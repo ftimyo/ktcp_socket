@@ -189,8 +189,16 @@ static void ktcp_data_ready(struct sock *sk, int bytes)
 
 static inline int ktcp_create_socket(struct socket **sk)
 {
+	struct mm_segment_t oldfs;
     int ret =  sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
-	(*sk)->sk->sk_rcvbuf = min_t(u32, PAGE_SIZE * 50, sysctl_rmem_max);
+	int val = 1;
+
+	oldfs = get_fs();
+	set_fs(KERNEL_DS);
+	/*Turn off Nagle's algorithm*/
+	sock_setsockopt(*sk, SOL_TCP, TCP_NODELAY, (char*)&val, sizeof(val));
+	set_fs(oldfs);
+
 	if (origSk == NULL)
 		origSk = (*sk)->sk->sk_data_ready;
 	return ret;
@@ -574,6 +582,8 @@ void dummie_handler(struct socket *sk, net_addr_t ip)
 {
 	int bytes;
 	bytes = ktcp_recv(sk, trash, PAGE_SIZE);
+	if (bytes == 0)
+		ktcp_close(ip);
 }
 
 int init_module(void)
