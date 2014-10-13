@@ -197,6 +197,9 @@ static void ktcp_data_ready(struct sock *sk, int bytes)
 static inline int ktcp_create_socket(struct socket **sk)
 {
     int ret =  sock_create_kern(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
+	struct sock *skk = (*sk)->sk;
+	pr_info("sk_user_data:%p\nsk_data_ready:%p\nsk_write_space:%p\n\
+			sk_state_change:%p\n", skk->sk_user_data, skk->sk_data_ready, skk->sk_write_space, skk->sk_state_change);
 #if 0
 	int val = 1;
 	kernel_setsockopt(*sk, SOL_TCP, TCP_NODELAY, (char*)&val, sizeof(val));
