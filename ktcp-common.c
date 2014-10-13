@@ -1,7 +1,6 @@
 #include "ktcp-common.h"
 #include <linux/inet.h>
 #include <linux/list.h>
-#include <linux/rwlock.h>
 #define TCP_PORT    8888
 
 typedef void (*sk_ready_ft)(struct sock*, int);
@@ -10,12 +9,14 @@ typedef struct ipt_entry {
 	struct list_head list;
     net_addr_t ip;
     struct socket *socket;
+	ktcp_request pending;
 } ipt_entry;
 
 /*-------ipt data and ops>-------*/
 static struct list_head ipt;
 
 static ktcp_user_ft ipt_poll_handler;
+static ktcp_user_ft ipt_pending_handler;
 
 static inline int ktcp_destroy_socket(struct socket*);
 
@@ -93,6 +94,7 @@ static inline int ipt_print_ip(void)
 
 	return cnt;
 }
+
 static inline ipt_entry* ipt_ip_entry(net_addr_t ip)
 {
 	ipt_entry *entry;
@@ -143,16 +145,21 @@ static void ipt_poll(void)
 		if (skb_queue_empty(&entry->socket->sk->sk_receive_queue)) {
 			continue;
 		}
-		ipt_poll_handler(entry->socket, entry->ip);
+		if (0) {//entry->pending.bytes != 0) {
+			ipt_pending_handler(entry->socket, entry->ip, &entry->pending);
+		} else {
+			ipt_poll_handler(entry->socket, entry->ip, &entry->pending);
+		}
 	}
 	read_unlock(&ipt_lock);
 }
 
-static inline void ipt_init(ktcp_user_ft handler)
+static inline void ipt_init(ktcp_user_ft handler, ktcp_user_ft pending_h)
 {
 	INIT_LIST_HEAD(&ipt);
 	rwlock_init(&ipt_lock);
 	ipt_poll_handler = handler;
+	ipt_pending_handler = pending_h;
 }
 
 static inline void ipt_exit(void)
@@ -189,16 +196,11 @@ static void ktcp_data_ready(struct sock *sk, int bytes)
 
 static inline int ktcp_create_socket(struct socket **sk)
 {
-	mm_segment_t oldfs;
-    int ret =  sock_create(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
+    int ret =  sock_create_kern(PF_INET, SOCK_STREAM, IPPROTO_TCP, sk);
+#if 0
 	int val = 1;
-
-	oldfs = get_fs();
-	set_fs(KERNEL_DS);
-	/*Turn off Nagle's algorithm*/
-	sock_setsockopt(*sk, SOL_TCP, TCP_NODELAY, (char*)&val, sizeof(val));
-	set_fs(oldfs);
-
+	kernel_setsockopt(*sk, SOL_TCP, TCP_NODELAY, (char*)&val, sizeof(val));
+#endif
 	if (origSk == NULL)
 		origSk = (*sk)->sk->sk_data_ready;
 	return ret;
@@ -266,7 +268,7 @@ done:
     return ret;
 }
 
-int ktcp_recv(struct socket *sk, void *buffer, int length)
+int ktcp_recv(struct socket *sk, void *buffer, int length, int flag)
 {
 	struct msghdr msg;
 	struct iovec iov;
@@ -285,7 +287,7 @@ int ktcp_recv(struct socket *sk, void *buffer, int length)
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
 #endif
-	bytes = sock_recvmsg(sk, &msg, length, MSG_WAITALL);
+	bytes = sock_recvmsg(sk, &msg, length, flag);
 #ifndef KSOCKET_ADDR_SAFE
 	set_fs(old_fs);
 #endif
@@ -417,8 +419,13 @@ static int ktcp_poll(void* dummie)
 	init_waitqueue_head(&wq);
 
 	while (!kthread_should_stop()) {
+#if 1
 		wait_event_interruptible(wq, ipt_sk_ready_check()||
 				kthread_should_stop());
+#else
+		schedule();
+#endif
+
 		ipt_poll();
 	}
 	return 0;
@@ -461,21 +468,9 @@ static int ktcp_server(void *dummie)
 	return 0;
 }
 
-int ktcp_init(ktcp_user_ft handler)
-{
-	ipt_init(handler);
-	ktcp_poll_lwp = kthread_run(ktcp_poll, NULL, "ktcp_poll");
-	ktcp_server_lwp = kthread_run(ktcp_server, NULL, "ktcp_server");
-	return 0;
-}
 
-int ktcp_exit()
-{
-	kthread_stop(ktcp_poll_lwp);
-	kthread_stop(ktcp_server_lwp);
-	ipt_exit();
-	return 0;
-}
+
+/*----------------------------------------------------------------------------------------------------*/
 /*------------------module only--------------------*/
 static u8	*trash = NULL;
 static atomic_t clients = ATOMIC_INIT(0);
@@ -517,6 +512,15 @@ int client_thread(void *ipp)
 	atomic_dec(&clients);
 	return 0;
 }
+
+void client_pending_r(struct socket *sk, net_addr_t ip, ktcp_request* req)
+{
+	int bytes;
+	u8 *data = req->page + (PAGE_SIZE - req->bytes);
+	bytes = ktcp_recv(sk, data, req->bytes, 0);
+	req->bytes -= bytes;
+}
+
 /*-----------------sysfs>--------------------------*/
 static struct kobject *control = NULL;
 
@@ -578,28 +582,26 @@ static struct attribute_group attr_group = {
 };
 /*-----------------<sysfs--------------------------*/
 
-void dummie_handler(struct socket *sk, net_addr_t ip)
+void dummie_handler(struct socket *sk, net_addr_t ip, ktcp_request* req)
 {
 	int bytes;
-	bytes = ktcp_recv(sk, trash, PAGE_SIZE);
-	if (bytes == 0)
-		ktcp_close(ip);
+#if 1
+	bytes = ktcp_recv(sk, trash, PAGE_SIZE, MSG_WAITALL);
+#else
+	req->bytes = PAGE_SIZE;
+	bytes = ktcp_recv(sk, trash, PAGE_SIZE, 0);
+	req->bytes -= bytes;
+	if (req->bytes != 0){
+		pr_info("pending recv\n");
+	}
+#endif
 }
 
 int init_module(void)
 {
-	int ret;
-
-	ktcp_init(dummie_handler);
+	ktcp_init(dummie_handler, client_pending_r);
 
 	trash = kmalloc(PAGE_SIZE, GFP_KERNEL);
-#if 0
-	control = kobject_create_and_add("ktcp_control", &(((struct module*)(THIS_MODULE))->mkobj.kobj));
-#endif
-	control = kobject_create_and_add("ktcp_control", NULL);
-
-	if (control)
-		ret = sysfs_create_group(control, &attr_group);
 
 	return 0;
 }
@@ -613,6 +615,37 @@ void cleanup_module()
 	pr_info("ktcp cleanup\n");
 }
 
+/*----------------------------interface-implementation---------------------*/
+int ktcp_init(ktcp_user_ft req_handler, ktcp_user_ft pending_handler)
+{
+	int ret = 0;
+	ipt_init(req_handler, pending_handler);
+	ktcp_poll_lwp = kthread_run(ktcp_poll, NULL, "ktcp_poll");
+	ktcp_server_lwp = kthread_run(ktcp_server, NULL, "ktcp_server");
+
+#if 0
+	control = kobject_create_and_add("ktcp_control", &(((struct module*)(THIS_MODULE))->mkobj.kobj));
+#else
+	control = kobject_create_and_add("ktcp_control", NULL);
+#endif
+	if (control)
+		ret = sysfs_create_group(control, &attr_group);
+
+	return ret;
+}
+
+int ktcp_exit()
+{
+	kthread_stop(ktcp_poll_lwp);
+	kthread_stop(ktcp_server_lwp);
+	ipt_exit();
+
+	if (control)
+		kobject_del(control);
+
+	return 0;
+}
+
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Timothy Yo <yyou4@binghamton.edu>");
-MODULE_DESCRIPTION("Sector hash Block Device");
+MODULE_DESCRIPTION("KTCP COORDINATION SYSTEM");
